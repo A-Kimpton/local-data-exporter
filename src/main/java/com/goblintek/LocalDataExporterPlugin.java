@@ -1,7 +1,6 @@
 package com.goblintek;
 
 import com.google.gson.Gson;
-import com.google.gson.GsonBuilder;
 import com.google.inject.Inject;
 import com.google.inject.Provides;
 import java.io.File;
@@ -43,7 +42,8 @@ public class LocalDataExporterPlugin extends Plugin
 	private static final String EXPORT_VERSION = "0.4.5";
 	private static final int LOGIN_SETTLE_TICKS = 5;
 
-	private static final Gson GSON = new GsonBuilder().setPrettyPrinting().create();
+	@Inject
+	private Gson gson;
 
 	@Inject
 	private Client client;
@@ -714,7 +714,7 @@ public class LocalDataExporterPlugin extends Plugin
 
 		try (FileReader reader = new FileReader(accountFile))
 		{
-			Object parsed = GSON.fromJson(reader, Map.class);
+			Object parsed = gson.fromJson(reader, Map.class);
 			if (parsed instanceof Map)
 			{
 				return (Map<String, Object>) parsed;
@@ -866,7 +866,7 @@ public class LocalDataExporterPlugin extends Plugin
 	{
 		try (FileWriter writer = new FileWriter(file))
 		{
-			GSON.toJson(snapshot, writer);
+			gson.toJson(snapshot, writer);
 		}
 	}
 
