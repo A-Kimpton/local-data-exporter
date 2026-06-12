@@ -9,6 +9,7 @@ Local Data Exporter is a RuneLite plugin that writes local account snapshots to 
 - Exports Grand Exchange offer data
 - Exports quest states
 - Exports achievement diary completion
+- Exports Slayer data: current task, streak, points, unlocks, task extensions, and per-master block lists
 - Exports basic status, location, world, and account metadata
 - Caches last known container data when bank, inventory, or equipment data is temporarily unavailable
 - Supports configurable export interval

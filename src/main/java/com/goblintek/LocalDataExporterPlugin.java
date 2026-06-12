@@ -8,7 +8,9 @@ import java.io.FileReader;
 import java.io.FileWriter;
 import java.io.IOException;
 import java.time.Instant;
+import java.util.ArrayList;
 import java.util.LinkedHashMap;
+import java.util.List;
 import java.util.Map;
 import lombok.extern.slf4j.Slf4j;
 import net.runelite.api.Client;
@@ -24,6 +26,8 @@ import net.runelite.api.Skill;
 import net.runelite.api.VarPlayer;
 import net.runelite.api.coords.WorldPoint;
 import net.runelite.api.events.GameTick;
+import net.runelite.api.gameval.DBTableID;
+import net.runelite.api.gameval.VarPlayerID;
 import net.runelite.api.gameval.VarbitID;
 import net.runelite.client.RuneLite;
 import net.runelite.client.config.ConfigManager;
@@ -40,7 +44,7 @@ import net.runelite.client.plugins.PluginDescriptor;
 )
 public class LocalDataExporterPlugin extends Plugin
 {
-	private static final String EXPORT_VERSION = "0.4.5";
+	private static final String EXPORT_VERSION = "0.5.0";
 	private static final int LOGIN_SETTLE_TICKS = 5;
 
 	@Inject
@@ -65,6 +69,11 @@ public class LocalDataExporterPlugin extends Plugin
 	private long lastGoodInventoryTimestamp;
 	private Map<String, Object> lastGoodEquipment;
 	private long lastGoodEquipmentTimestamp;
+
+	// SLAYER_MASTER varbit value -> assigning master. 0 = no master assigned.
+	private static final String[] SLAYER_MASTER_NAMES = {
+			null, "Turael", "Mazchna", "Vannaka", "Chaeldar", "Nieve", "Duradel", "Krystilia", "Konar quo Maten"
+	};
 
 	@Provides
 	LocalDataExporterConfig provideConfig(ConfigManager configManager)
@@ -275,6 +284,7 @@ public class LocalDataExporterPlugin extends Plugin
 		snapshot.put("grandExchange", grandExchange);
 		snapshot.put("quests", chooseSectionForExport("quests", buildQuests(), previousSnapshot));
 		snapshot.put("achievementDiaries", chooseSectionForExport("achievementDiaries", buildAchievementDiaries(), previousSnapshot));
+		snapshot.put("slayer", chooseSectionForExport("slayer", buildSlayer(), previousSnapshot));
 
 		writeJson(exportDirectory, rsn, snapshot);
 
@@ -569,6 +579,261 @@ public class LocalDataExporterPlugin extends Plugin
 	private boolean isAchievementDiaryTierComplete(int varbitId)
 	{
 		return client.getVarbitValue(varbitId) > 0;
+	}
+
+	private Map<String, Object> buildSlayer()
+	{
+		Map<String, Object> result = new LinkedHashMap<>();
+		result.put("source", "RuneLite slayer varbits/varps + SlayerTask DB table");
+		// Slayer data is readable whenever logged in, and exportSnapshot() only runs with a local player present.
+		result.put("loaded", true);
+
+		result.put("points", client.getVarbitValue(VarbitID.SLAYER_POINTS));
+		result.put("tasksCompletedStreak", client.getVarbitValue(VarbitID.SLAYER_TASKS_COMPLETED));
+		result.put("wildernessTasksCompleted", client.getVarbitValue(VarbitID.SLAYER_WILDERNESS_TASKS_COMPLETED));
+
+		result.put("currentTask", buildSlayerCurrentTask());
+		result.put("unlocks", buildSlayerUnlocks());
+		result.put("taskExtensions", buildSlayerTaskExtensions());
+		result.put("autoKill", buildSlayerAutoKill());
+		result.put("blockLists", buildSlayerBlockLists());
+
+		return result;
+	}
+
+	private Map<String, Object> buildSlayerCurrentTask()
+	{
+		Map<String, Object> task = new LinkedHashMap<>();
+
+		int taskId = client.getVarpValue(VarPlayerID.SLAYER_TARGET);
+		int amountRemaining = client.getVarpValue(VarPlayerID.SLAYER_COUNT);
+		int initialAmount = client.getVarpValue(VarPlayerID.SLAYER_COUNT_ORIGINAL);
+		int areaId = client.getVarpValue(VarPlayerID.SLAYER_AREA);
+		int masterId = client.getVarbitValue(VarbitID.SLAYER_MASTER);
+		int bossId = client.getVarbitValue(VarbitID.SLAYER_TARGET_BOSSID);
+
+		task.put("hasTask", taskId > 0 && amountRemaining > 0);
+		task.put("taskId", taskId);
+		task.put("name", lookupSlayerTaskName(taskId));
+		task.put("amountRemaining", amountRemaining);
+		task.put("initialAmount", initialAmount);
+		task.put("areaId", areaId);
+		task.put("assignedMasterId", masterId);
+		task.put("assignedMasterName", slayerMasterName(masterId));
+		task.put("bossId", bossId);
+
+		return task;
+	}
+
+	private String slayerMasterName(int masterId)
+	{
+		if (masterId > 0 && masterId < SLAYER_MASTER_NAMES.length)
+		{
+			return SLAYER_MASTER_NAMES[masterId];
+		}
+		return null;
+	}
+
+	private Map<String, Object> buildSlayerBlockLists()
+	{
+		Map<String, Object> masters = new LinkedHashMap<>();
+
+		addSlayerMasterBlockList(masters, "turael",
+				VarbitID.SLAYER_BLOCKED_TURAEL_1, VarbitID.SLAYER_BLOCKED_TURAEL_2, VarbitID.SLAYER_BLOCKED_TURAEL_3,
+				VarbitID.SLAYER_BLOCKED_TURAEL_4, VarbitID.SLAYER_BLOCKED_TURAEL_5, VarbitID.SLAYER_BLOCKED_TURAEL_6,
+				VarbitID.SLAYER_BLOCKED_TURAEL_DIARY);
+		addSlayerMasterBlockList(masters, "mazchna",
+				VarbitID.SLAYER_BLOCKED_MAZCHNA_1, VarbitID.SLAYER_BLOCKED_MAZCHNA_2, VarbitID.SLAYER_BLOCKED_MAZCHNA_3,
+				VarbitID.SLAYER_BLOCKED_MAZCHNA_4, VarbitID.SLAYER_BLOCKED_MAZCHNA_5, VarbitID.SLAYER_BLOCKED_MAZCHNA_6,
+				VarbitID.SLAYER_BLOCKED_MAZCHNA_DIARY);
+		addSlayerMasterBlockList(masters, "vannaka",
+				VarbitID.SLAYER_BLOCKED_VANNAKA_1, VarbitID.SLAYER_BLOCKED_VANNAKA_2, VarbitID.SLAYER_BLOCKED_VANNAKA_3,
+				VarbitID.SLAYER_BLOCKED_VANNAKA_4, VarbitID.SLAYER_BLOCKED_VANNAKA_5, VarbitID.SLAYER_BLOCKED_VANNAKA_6,
+				VarbitID.SLAYER_BLOCKED_VANNAKA_DIARY);
+		addSlayerMasterBlockList(masters, "chaeldar",
+				VarbitID.SLAYER_BLOCKED_CHAELDAR_1, VarbitID.SLAYER_BLOCKED_CHAELDAR_2, VarbitID.SLAYER_BLOCKED_CHAELDAR_3,
+				VarbitID.SLAYER_BLOCKED_CHAELDAR_4, VarbitID.SLAYER_BLOCKED_CHAELDAR_5, VarbitID.SLAYER_BLOCKED_CHAELDAR_6,
+				VarbitID.SLAYER_BLOCKED_CHAELDAR_DIARY);
+		addSlayerMasterBlockList(masters, "konar",
+				VarbitID.SLAYER_BLOCKED_KONAR_1, VarbitID.SLAYER_BLOCKED_KONAR_2, VarbitID.SLAYER_BLOCKED_KONAR_3,
+				VarbitID.SLAYER_BLOCKED_KONAR_4, VarbitID.SLAYER_BLOCKED_KONAR_5, VarbitID.SLAYER_BLOCKED_KONAR_6,
+				VarbitID.SLAYER_BLOCKED_KONAR_DIARY);
+		addSlayerMasterBlockList(masters, "nieve",
+				VarbitID.SLAYER_BLOCKED_NIEVE_1, VarbitID.SLAYER_BLOCKED_NIEVE_2, VarbitID.SLAYER_BLOCKED_NIEVE_3,
+				VarbitID.SLAYER_BLOCKED_NIEVE_4, VarbitID.SLAYER_BLOCKED_NIEVE_5, VarbitID.SLAYER_BLOCKED_NIEVE_6,
+				VarbitID.SLAYER_BLOCKED_NIEVE_DIARY);
+		addSlayerMasterBlockList(masters, "duradel",
+				VarbitID.SLAYER_BLOCKED_DURADEL_1, VarbitID.SLAYER_BLOCKED_DURADEL_2, VarbitID.SLAYER_BLOCKED_DURADEL_3,
+				VarbitID.SLAYER_BLOCKED_DURADEL_4, VarbitID.SLAYER_BLOCKED_DURADEL_5, VarbitID.SLAYER_BLOCKED_DURADEL_6,
+				VarbitID.SLAYER_BLOCKED_DURADEL_DIARY);
+		addSlayerMasterBlockList(masters, "krystilia",
+				VarbitID.SLAYER_BLOCKED_KRYSTILIA_1, VarbitID.SLAYER_BLOCKED_KRYSTILIA_2, VarbitID.SLAYER_BLOCKED_KRYSTILIA_3,
+				VarbitID.SLAYER_BLOCKED_KRYSTILIA_4, VarbitID.SLAYER_BLOCKED_KRYSTILIA_5, VarbitID.SLAYER_BLOCKED_KRYSTILIA_6,
+				VarbitID.SLAYER_BLOCKED_KRYSTILIA_DIARY);
+
+		return masters;
+	}
+
+	private void addSlayerMasterBlockList(
+			Map<String, Object> masters,
+			String key,
+			int slot1Varbit,
+			int slot2Varbit,
+			int slot3Varbit,
+			int slot4Varbit,
+			int slot5Varbit,
+			int slot6Varbit,
+			int diaryVarbit
+	)
+	{
+		Map<String, Object> entry = new LinkedHashMap<>();
+		List<Map<String, Object>> slots = new ArrayList<>();
+
+		int[] slotVarbits = {slot1Varbit, slot2Varbit, slot3Varbit, slot4Varbit, slot5Varbit, slot6Varbit};
+		for (int i = 0; i < slotVarbits.length; i++)
+		{
+			slots.add(buildSlayerBlockSlot(i + 1, slotVarbits[i]));
+		}
+
+		entry.put("slots", slots);
+		entry.put("diarySlot", buildSlayerBlockSlot(0, diaryVarbit));
+		masters.put(key, entry);
+	}
+
+	private Map<String, Object> buildSlayerBlockSlot(int slot, int varbitId)
+	{
+		Map<String, Object> result = new LinkedHashMap<>();
+		int taskId = client.getVarbitValue(varbitId);
+
+		result.put("slot", slot);
+		result.put("blocked", taskId > 0);
+		result.put("taskId", taskId);
+		result.put("name", taskId > 0 ? lookupSlayerTaskName(taskId) : null);
+
+		return result;
+	}
+
+	// Reward-shop unlocks (the "Unlock" tab). Each varbit is non-zero once purchased.
+	private Map<String, Object> buildSlayerUnlocks()
+	{
+		Map<String, Object> unlocks = new LinkedHashMap<>();
+
+		addSlayerVarbit(unlocks, "redDragons", VarbitID.SLAYER_UNLOCK_REDDRAGONS);
+		addSlayerVarbit(unlocks, "mithrilDragons", VarbitID.SLAYER_UNLOCK_MITHRILDRAGONS);
+		addSlayerVarbit(unlocks, "aviansies", VarbitID.SLAYER_UNLOCK_AVIANSIES);
+		addSlayerVarbit(unlocks, "tzhaar", VarbitID.SLAYER_UNLOCK_TZHAAR);
+		addSlayerVarbit(unlocks, "lizardmen", VarbitID.SLAYER_UNLOCK_LIZARDMEN);
+		addSlayerVarbit(unlocks, "basilisks", VarbitID.SLAYER_UNLOCK_BASILISK);
+		addSlayerVarbit(unlocks, "vampyres", VarbitID.SLAYER_UNLOCK_VAMPYRES);
+		addSlayerVarbit(unlocks, "warpedCreatures", VarbitID.SLAYER_UNLOCK_WARPED_CREATURES);
+		addSlayerVarbit(unlocks, "aquanites", VarbitID.SLAYER_UNLOCK_AQUANITES);
+		addSlayerVarbit(unlocks, "gryphons", VarbitID.SLAYER_UNLOCK_GRYPHONS);
+		addSlayerVarbit(unlocks, "bosses", VarbitID.SLAYER_UNLOCK_BOSSES);
+		addSlayerVarbit(unlocks, "superiorMonsters", VarbitID.SLAYER_UNLOCK_SUPERIORMOBS);
+		addSlayerVarbit(unlocks, "grotesqueGuardiansKills", VarbitID.SLAYER_UNLOCK_GROTESQUEKILLS);
+		addSlayerVarbit(unlocks, "notedMithrilBars", VarbitID.SLAYER_UNLOCK_NOTEDMITHRILBARS);
+		addSlayerVarbit(unlocks, "fossilIslandWyvernBlock", VarbitID.SLAYER_UNLOCK_FOSSILWYVERNBLOCK);
+		addSlayerVarbit(unlocks, "wildernessExtraTasks", VarbitID.SLAYER_UNLOCK_WILDY_EXTRATASKS);
+		addSlayerVarbit(unlocks, "slayerHelmet", VarbitID.SLAYER_UNLOCK_HELM_HOODED);
+		addSlayerVarbit(unlocks, "taskStorage", VarbitID.SLAYER_UNLOCK_STORAGE);
+		addSlayerVarbit(unlocks, "slayerHelmetBlack", VarbitID.SLAYER_UNLOCK_HELM_BLACK);
+		addSlayerVarbit(unlocks, "slayerHelmetGreen", VarbitID.SLAYER_UNLOCK_HELM_GREEN);
+		addSlayerVarbit(unlocks, "slayerHelmetRed", VarbitID.SLAYER_UNLOCK_HELM_RED);
+		addSlayerVarbit(unlocks, "slayerHelmetPurple", VarbitID.SLAYER_UNLOCK_HELM_PURPLE);
+		addSlayerVarbit(unlocks, "slayerHelmetTurquoise", VarbitID.SLAYER_UNLOCK_HELM_TURQUOISE);
+		addSlayerVarbit(unlocks, "slayerHelmetHydra", VarbitID.SLAYER_UNLOCK_HELM_HYDRA);
+		addSlayerVarbit(unlocks, "slayerHelmetTwisted", VarbitID.SLAYER_UNLOCK_HELM_TWISTED);
+		addSlayerVarbit(unlocks, "slayerHelmetAraxyte", VarbitID.SLAYER_UNLOCK_HELM_ARAXYTE);
+
+		return unlocks;
+	}
+
+	// Task extensions (the "Extend" unlocks). Each varbit is non-zero once the longer assignment is purchased.
+	private Map<String, Object> buildSlayerTaskExtensions()
+	{
+		Map<String, Object> extensions = new LinkedHashMap<>();
+
+		addSlayerVarbit(extensions, "aberrantSpectres", VarbitID.SLAYER_LONGER_ABERRANTSPECTRES);
+		addSlayerVarbit(extensions, "abyssalDemons", VarbitID.SLAYER_LONGER_ABYSSALDEMONS);
+		addSlayerVarbit(extensions, "adamantDragons", VarbitID.SLAYER_LONGER_ADAMANTDRAGONS);
+		addSlayerVarbit(extensions, "ankou", VarbitID.SLAYER_LONGER_ANKOU);
+		addSlayerVarbit(extensions, "aquanites", VarbitID.SLAYER_LONGER_AQUANITES);
+		addSlayerVarbit(extensions, "araxytes", VarbitID.SLAYER_LONGER_ARAXYTES);
+		addSlayerVarbit(extensions, "aviansies", VarbitID.SLAYER_LONGER_AVIANSIES);
+		addSlayerVarbit(extensions, "basilisks", VarbitID.SLAYER_LONGER_BASILISK);
+		addSlayerVarbit(extensions, "blackDemons", VarbitID.SLAYER_LONGER_BLACKDEMONS);
+		addSlayerVarbit(extensions, "blackDragons", VarbitID.SLAYER_LONGER_BLACKDRAGONS);
+		addSlayerVarbit(extensions, "bloodveld", VarbitID.SLAYER_LONGER_BLOODVELD);
+		addSlayerVarbit(extensions, "caveHorrors", VarbitID.SLAYER_LONGER_CAVEHORRORS);
+		addSlayerVarbit(extensions, "caveKraken", VarbitID.SLAYER_LONGER_CAVEKRAKEN);
+		addSlayerVarbit(extensions, "custodians", VarbitID.SLAYER_LONGER_CUSTODIANS);
+		addSlayerVarbit(extensions, "darkBeasts", VarbitID.SLAYER_LONGER_DARKBEASTS);
+		addSlayerVarbit(extensions, "dustDevils", VarbitID.SLAYER_LONGER_DUSTDEVILS);
+		addSlayerVarbit(extensions, "fossilIslandWyverns", VarbitID.SLAYER_LONGER_FOSSILWYVERNS);
+		addSlayerVarbit(extensions, "gargoyles", VarbitID.SLAYER_LONGER_GARGOYLES);
+		addSlayerVarbit(extensions, "greaterDemons", VarbitID.SLAYER_LONGER_GREATERDEMONS);
+		addSlayerVarbit(extensions, "metalDragons", VarbitID.SLAYER_LONGER_METALDRAGONS);
+		addSlayerVarbit(extensions, "mithrilDragons", VarbitID.SLAYER_LONGER_MITHRILDRAGONS);
+		addSlayerVarbit(extensions, "nechryael", VarbitID.SLAYER_LONGER_NECHRYAEL);
+		addSlayerVarbit(extensions, "revenants", VarbitID.SLAYER_LONGER_REVENANTS);
+		addSlayerVarbit(extensions, "runeDragons", VarbitID.SLAYER_LONGER_RUNEDRAGONS);
+		addSlayerVarbit(extensions, "scabarites", VarbitID.SLAYER_LONGER_SCABARITES);
+		addSlayerVarbit(extensions, "skeletalWyverns", VarbitID.SLAYER_LONGER_SKELETALWYVERNS);
+		addSlayerVarbit(extensions, "spiritualCreatures", VarbitID.SLAYER_LONGER_SPIRITUALGWD);
+		addSlayerVarbit(extensions, "suqahs", VarbitID.SLAYER_LONGER_SUQAH);
+		addSlayerVarbit(extensions, "vampyres", VarbitID.SLAYER_LONGER_VAMPYRES);
+		addSlayerVarbit(extensions, "wyrms", VarbitID.SLAYER_LONGER_WYRMS);
+
+		return extensions;
+	}
+
+	// Auto-kill toggles for tasks with a "do not return" reward unlock.
+	private Map<String, Object> buildSlayerAutoKill()
+	{
+		Map<String, Object> autoKill = new LinkedHashMap<>();
+
+		addSlayerVarbit(autoKill, "desertLizards", VarbitID.SLAYER_AUTOKILL_DESERTLIZARDS);
+		addSlayerVarbit(autoKill, "gargoyles", VarbitID.SLAYER_AUTOKILL_GARGOYLES);
+		addSlayerVarbit(autoKill, "rockslugs", VarbitID.SLAYER_AUTOKILL_ROCKSLUGS);
+		addSlayerVarbit(autoKill, "zygomites", VarbitID.SLAYER_AUTOKILL_ZYGOMITES);
+
+		return autoKill;
+	}
+
+	private void addSlayerVarbit(Map<String, Object> map, String key, int varbitId)
+	{
+		map.put(key, client.getVarbitValue(varbitId));
+	}
+
+	// Resolves the task/creature name for a SlayerTask id via RuneLite's DB-table API; null if unknown.
+	private String lookupSlayerTaskName(int taskId)
+	{
+		if (taskId <= 0)
+		{
+			return null;
+		}
+
+		try
+		{
+			List<Integer> rows = client.getDBRowsByValue(DBTableID.SlayerTask.ID, DBTableID.SlayerTask.COL_ID, 0, taskId);
+			if (rows == null || rows.isEmpty())
+			{
+				return null;
+			}
+
+			Object[] nameField = client.getDBTableField(rows.get(0), DBTableID.SlayerTask.COL_NAME_UPPERCASE, 0);
+			if (nameField == null || nameField.length == 0 || nameField[0] == null)
+			{
+				return null;
+			}
+
+			return String.valueOf(nameField[0]);
+		}
+		catch (Exception e)
+		{
+			log.debug("Local Data Exporter could not resolve slayer task name for id {}", taskId, e);
+			return null;
+		}
 	}
 
 	private Map<String, Object> buildSkills()
